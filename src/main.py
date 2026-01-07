@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from services import scrape_service
+from src.services import scrape_service, team_offense_service
 
 app = FastAPI()
 
@@ -22,4 +22,13 @@ async def scrape_data(team: str, year: int):
     """
 
     data = await scrape_service.scrape_and_store(team, year)
+    return data
+
+
+
+@app.get("/scrape/{year}")
+async def scrape_team_offense(year: int):
+
+
+    data = await team_offense_service.scrape_and_store_team_offense(year)
     return data

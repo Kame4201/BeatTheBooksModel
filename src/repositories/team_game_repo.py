@@ -1,7 +1,7 @@
 # repositories/team_game_repo.py
 from sqlalchemy.orm import Session
-from entities.team_game import TeamGame
-from dtos.team_game_dto import TeamGameCreate
+from src.entities.team_game import TeamGame
+from src.dtos.team_game_dto import TeamGameCreate
 
 class TeamGameRepository:
 

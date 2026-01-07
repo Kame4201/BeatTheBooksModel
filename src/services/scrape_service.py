@@ -9,9 +9,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
-from dtos.team_game_dto import TeamGameCreate
-from repositories.team_game_repo import TeamGameRepository
-from core.database import SessionLocal
+from src.dtos.team_game_dto import TeamGameCreate
+from src.repositories.team_game_repo import TeamGameRepository
+from src.core.database import SessionLocal
 
 
 def flatten_pfr_columns(df: pd.DataFrame):
