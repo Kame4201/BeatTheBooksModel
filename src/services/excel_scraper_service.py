@@ -74,8 +74,8 @@ def extract_tables_from_url(url: str) -> List[Dict[str, Any]]:
         'Upgrade-Insecure-Requests': '1'
     }
 
-    # Add delay to be respectful to the server
-    time.sleep(2)  # 2 second delay between requests
+    # Add delay to be respectful to the server and avoid getting blocked
+    time.sleep(60)  # 60 second delay between requests
 
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
