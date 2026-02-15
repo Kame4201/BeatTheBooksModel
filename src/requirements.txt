@@ -27,3 +27,7 @@ pandas
 selenium
 webdriver-manager
 openpyxl
+
+# Testing
+pytest
+pytest-asyncio
