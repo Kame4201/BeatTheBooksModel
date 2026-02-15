@@ -26,3 +26,4 @@ aiohttp
 pandas
 selenium
 webdriver-manager
+openpyxl
