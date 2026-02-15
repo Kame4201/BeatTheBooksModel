@@ -2,7 +2,7 @@
 Excel-based URL scraper service for Pro-Football-Reference data.
 
 This service reads URLs from an Excel file and scrapes stat tables from each URL,
-then stores them in the database with metadata.
+then stores them in the database with metadata using the repository layer.
 """
 
 import pandas as pd
@@ -10,11 +10,11 @@ import requests
 import time
 from bs4 import BeautifulSoup, Comment
 from datetime import datetime
-from typing import List, Dict, Any, Optional
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from typing import List, Dict, Any
 
 from src.core.database import SessionLocal
+from src.repositories.scraped_data_repo import ScrapedDataRepository
+from src.dtos.scraped_data_dto import ScrapedDataMetadataCreate
 
 
 def read_excel_urls(excel_path: str) -> pd.DataFrame:
@@ -178,117 +178,20 @@ def add_metadata_columns(df: pd.DataFrame, url: str, metadata: Dict[str, Any]) -
     return df
 
 
-def create_table_if_not_exists(db: Session, table_name: str, df: pd.DataFrame) -> None:
-    """
-    Dynamically create database table based on DataFrame structure.
-
-    Args:
-        db: Database session
-        table_name: Name for the database table
-        df: DataFrame to base table structure on
-    """
-    # Clean table name (remove special characters)
-    clean_table_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in table_name.lower())
-
-    # Build CREATE TABLE statement
-    columns = []
-    columns.append("id SERIAL PRIMARY KEY")
-
-    for col in df.columns:
-        clean_col = ''.join(c if c.isalnum() or c == '_' else '_' for c in str(col).lower())
-
-        # Determine data type based on pandas dtype
-        dtype = df[col].dtype
-        if pd.api.types.is_integer_dtype(dtype):
-            sql_type = "INTEGER"
-        elif pd.api.types.is_float_dtype(dtype):
-            sql_type = "FLOAT"
-        elif pd.api.types.is_datetime64_any_dtype(dtype):
-            sql_type = "TIMESTAMP"
-        else:
-            sql_type = "TEXT"
-
-        columns.append(f"{clean_col} {sql_type}")
-
-    create_sql = f"""
-    CREATE TABLE IF NOT EXISTS {clean_table_name} (
-        {', '.join(columns)}
-    )
-    """
-
-    try:
-        db.execute(text(create_sql))
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        print(f"Warning: Could not create table {clean_table_name}: {e}")
-
-
-def upsert_dataframe(db: Session, table_name: str, df: pd.DataFrame) -> int:
-    """
-    Insert or update DataFrame rows into database table.
-
-    Uses a simple strategy: delete existing rows with same source_url and insert new ones.
-    This ensures idempotent runs.
-
-    Args:
-        db: Database session
-        table_name: Target table name
-        df: DataFrame to insert
-
-    Returns:
-        Number of rows inserted
-    """
-    clean_table_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in table_name.lower())
-
-    # Delete existing rows from same source_url (if that column exists)
-    if 'source_url' in df.columns:
-        source_urls = df['source_url'].unique()
-        for source_url in source_urls:
-            delete_sql = text(f"DELETE FROM {clean_table_name} WHERE source_url = :url")
-            db.execute(delete_sql, {"url": source_url})
-
-    # Insert new rows
-    rows_inserted = 0
-    for _, row in df.iterrows():
-        # Clean column names
-        clean_cols = []
-        values = []
-        placeholders = []
-
-        for idx, (col, val) in enumerate(row.items()):
-            clean_col = ''.join(c if c.isalnum() or c == '_' else '_' for c in str(col).lower())
-            clean_cols.append(clean_col)
-
-            # Convert NaN to None
-            if pd.isna(val):
-                values.append(None)
-            else:
-                values.append(val)
-
-            placeholders.append(f":val{idx}")
-
-        insert_sql = text(f"""
-            INSERT INTO {clean_table_name} ({', '.join(clean_cols)})
-            VALUES ({', '.join(placeholders)})
-        """)
-
-        params = {f"val{idx}": val for idx, val in enumerate(values)}
-
-        try:
-            db.execute(insert_sql, params)
-            rows_inserted += 1
-        except Exception as e:
-            print(f"Warning: Could not insert row: {e}")
-            continue
-
-    db.commit()
-    return rows_inserted
+# Database operations have been moved to the repository layer
+# See src/repositories/scraped_data_repo.py for:
+# - create_dynamic_table()
+# - upsert_dataframe()
+# - delete_by_source_url()
+# - insert_dataframe_rows()
 
 
 async def scrape_from_excel(excel_path: str) -> Dict[str, Any]:
     """
     Main function to scrape URLs from Excel file and store in database.
+
+    Uses the repository layer for all database operations following proper
+    architectural patterns with entities, DTOs, and repositories.
 
     Args:
         excel_path: Path to Excel file containing URLs
@@ -303,6 +206,7 @@ async def scrape_from_excel(excel_path: str) -> Dict[str, Any]:
         - errors: List of error messages
     """
     db = SessionLocal()
+    repo = ScrapedDataRepository(db)
 
     results = {
         'urls_processed': 0,
@@ -314,6 +218,9 @@ async def scrape_from_excel(excel_path: str) -> Dict[str, Any]:
     }
 
     try:
+        # Ensure metadata tracking table exists
+        repo.create_metadata_table_if_not_exists()
+
         # Read URLs from Excel
         urls_df = read_excel_urls(excel_path)
         results['urls_processed'] = len(urls_df)
@@ -322,7 +229,7 @@ async def scrape_from_excel(excel_path: str) -> Dict[str, Any]:
         for idx, row in urls_df.iterrows():
             url = row['url']
 
-            # Extract metadata
+            # Extract metadata from Excel row
             metadata = {
                 'season': row.get('season'),
                 'entity_type': row.get('entity_type'),
@@ -338,15 +245,35 @@ async def scrape_from_excel(excel_path: str) -> Dict[str, Any]:
                 for table_info in tables:
                     df = table_info['dataframe']
                     table_id = table_info['table_id']
+                    table_name = table_info['table_name']
+                    source_type = table_info['source']
 
-                    # Add metadata
+                    # Add metadata columns to DataFrame
                     df = add_metadata_columns(df, url, metadata)
 
-                    # Create table and insert data
-                    table_name = f"scraped_{table_id}"
-                    create_table_if_not_exists(db, table_name, df)
-                    rows = upsert_dataframe(db, table_name, df)
+                    # Create dynamic table name
+                    dynamic_table_name = f"scraped_{table_id}"
+
+                    # Use repository to create table if needed
+                    repo.create_dynamic_table(dynamic_table_name, df)
+
+                    # Use repository to upsert data (idempotent)
+                    rows = repo.upsert_dataframe(dynamic_table_name, df)
                     results['rows_inserted'] += rows
+
+                    # Track metadata in scraped_data_metadata table using DTO
+                    metadata_dto = ScrapedDataMetadataCreate(
+                        source_url=url,
+                        table_id=table_id,
+                        table_name=table_name,
+                        scraped_at=datetime.now(),
+                        season=metadata.get('season'),
+                        entity_type=metadata.get('entity_type'),
+                        table_type=metadata.get('table_type'),
+                        rows_scraped=rows,
+                        source_type=source_type
+                    )
+                    repo.track_scraped_data(metadata_dto)
 
                 results['urls_success'] += 1
 
